@@ -22,16 +22,6 @@
 
 ---
 
-## Скриншоты
-
-*(Здесь вы можете добавить скриншоты вашего приложения. Рекомендуется как минимум один скриншот главного экрана и один скриншот карты/настроек уведомлений.)*
-
-![Скриншот главного экрана](link_to_your_main_screen_screenshot.png)
-![Скриншот настройки уведомлений](link_to_your_notifications_screenshot.png)
-*(Замените `link_to_your_main_screen_screenshot.png` и `link_to_your_notifications_screenshot.png` на реальные ссылки к изображениям в вашем репозитории или облаке.)*
-
----
-
 ## Установка и запуск
 
 ### Сборка из исходников
@@ -87,12 +77,12 @@
 
 ## Вклад
 
-Приветствуются любые вклады! Если у вас есть идеи по улучшению, отчеты об ошибках или предложения по функциям, пожалуйста, создавайте [Issue](https://github.com/YourUsername/CurfewNotifier/issues) или [Pull Request](https://github.com/YourUsername/CurfewNotifier/pulls).
+Приветствуются любые вклады! Если у вас есть идеи по улучшению, отчеты об ошибках или предложения по функциям, пожалуйста, создавайте [Issue](https://github.com/Monekx/CurfewNotifier/issues) или [Pull Request](https://github.com/Monekx/CurfewNotifier/pulls).
 
 ---
 
 ## Контакты
 
-Monekx - [@monekx](https://github.com/monekx) - ваш_email@example.com
+Monekx - [@monekx](https://github.com/Monekx) - sobolutcom183@gmail.com
 
-Ссылка на проект: [https://github.com/YourUsername/CurfewNotifier](https://github.com/YourUsername/CurfewNotifier)
+Ссылка на проект: [https://github.com/YourUsername/CurfewNotifier](https://github.com/Monekx/CurfewNotifier)
