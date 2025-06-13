@@ -1,3 +1,5 @@
+import com.android.build.gradle.internal.api.BaseVariantOutputImpl
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -7,6 +9,23 @@ plugins {
 android {
     namespace = "com.monekx.curfewnotifier"
     compileSdk = 35
+
+    applicationVariants.all {
+        val variant = this
+        outputs.all {
+            val output = this as BaseVariantOutputImpl
+
+            val appName = "CurfewNotifier"
+            val buildType = variant.buildType.name
+            val versionName = variant.versionName
+
+            // Вытаскиваем ABI (если используешь splits.abi)
+            val abiFilter = output.filters.find { it.filterType == "ABI" }?.identifier
+            val abiSuffix = if (abiFilter != null) "_${abiFilter}" else ""
+
+            output.outputFileName = "${appName}_${buildType}${abiSuffix}_v${versionName}.apk"
+        }
+    }
 
     defaultConfig {
         applicationId = "com.monekx.curfewnotifier"
@@ -49,7 +68,7 @@ android {
             )
 
             // Отключить создание универсального APK, чтобы получить отдельные APK
-            isUniversalApk = false // Используем присваивание с префиксом 'is'
+            isUniversalApk = true // Используем присваивание с префиксом 'is'
         }
     }
 
@@ -74,8 +93,7 @@ dependencies {
         exclude(group = "stax", module = "stax-api")
         exclude(group = "xpp3", module = "xpp3")
     }
-    
-    implementation("com.google.android.gms:play-services-location:21.3.0") // Используем последнюю стабильную версию
+    implementation("com.google.android.gms:play-services-location:21.3.0")
     implementation("com.google.code.gson:gson:2.11.0")
     implementation("org.osmdroid:osmdroid-android:6.1.20") // Последняя стабильная версия может отличаться
     implementation("org.osmdroid:osmdroid-wms:6.1.20")
