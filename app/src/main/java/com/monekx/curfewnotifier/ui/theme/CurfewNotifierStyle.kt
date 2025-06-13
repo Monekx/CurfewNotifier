@@ -24,7 +24,7 @@ private val LightColorScheme = lightColorScheme(
 )
 
 // Можно добавить кастомные шрифты, если хочешь — пока стандартный Roboto
-private val AppTypography = Typography(
+private val AppTypography1 = Typography(
     bodyLarge = androidx.compose.ui.text.TextStyle(
         fontWeight = FontWeight.Normal,
         fontSize = 16.sp,
@@ -44,7 +44,7 @@ private val AppShapes = Shapes(
 )
 
 @Composable
-fun CurfewNotifierTheme(
+fun CurfewNotifierTheme1(
     content: @Composable () -> Unit
 ) {
     MaterialTheme(

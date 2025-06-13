@@ -12,8 +12,8 @@ android {
         applicationId = "com.monekx.curfewnotifier"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1b"
+        versionCode = 2
+        versionName = "0.2b"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -27,6 +27,32 @@ android {
             )
         }
     }
+
+    splits {
+        // Доступ к конфигурации ABI
+        abi {
+            // Включаем разделение по ABI
+            isEnable = true // Используем присваивание
+
+            // Сбросить все фильтры, чтобы не было конфликтов
+            reset()
+
+            // Включаем необходимые архитектуры
+            // Используем setIncludes с listOf для явного указания
+            include(
+
+                    "armeabi-v7a",
+                    "arm64-v8a",
+                    "x86",
+                    "x86_64"
+
+            )
+
+            // Отключить создание универсального APK, чтобы получить отдельные APK
+            isUniversalApk = false // Используем присваивание с префиксом 'is'
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
@@ -41,6 +67,14 @@ android {
 }
 
 dependencies {
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("com.squareup.retrofit2:retrofit:2.9.0")
+    implementation("com.squareup.retrofit2:converter-simplexml:2.9.0")
+    implementation("org.simpleframework:simple-xml:2.7.1") {
+        exclude(group = "stax", module = "stax-api")
+        exclude(group = "xpp3", module = "xpp3")
+    }
+    
     implementation("com.google.android.gms:play-services-location:21.3.0") // Используем последнюю стабильную версию
     implementation("com.google.code.gson:gson:2.11.0")
     implementation("org.osmdroid:osmdroid-android:6.1.20") // Последняя стабильная версия может отличаться
