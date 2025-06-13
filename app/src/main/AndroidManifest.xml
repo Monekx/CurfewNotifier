@@ -45,7 +45,10 @@
             android:exported="false"
             android:label="Выберите точку дома"
             android:theme="@style/Theme.AppCompat.Light.NoActionBar" /> <!-- Добавили тему AppCompat -->
-
+        <activity
+            android:name=".WebViewActivity"
+            android:exported="false"
+            android:screenOrientation="portrait" />
 
     </application>
 

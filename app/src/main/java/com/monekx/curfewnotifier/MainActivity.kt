@@ -10,6 +10,7 @@ import android.os.Bundle
 import android.os.PowerManager
 import android.provider.Settings
 import android.util.Log
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.ActivityResultLauncher
@@ -48,6 +49,11 @@ import kotlinx.coroutines.delay
 import java.time.Duration
 import java.time.LocalTime
 import androidx.compose.ui.text.input.KeyboardType
+// УДАЛЕНЫ импорты Accompanist:
+// import com.google.accompanist.swiperefresh.SwipeRefresh
+// import com.google.accompanist.swiperefresh.rememberSwipeRefreshState
+// import com.google.accompanist.swiperefresh.SwipeRefreshIndicator
+
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import android.app.NotificationChannel
@@ -254,6 +260,24 @@ fun MainScreen(context: Context, mapLauncher: ActivityResultLauncher<Intent>) {
     var isLoadingNews by remember { mutableStateOf(false) }
     var newsError by remember { mutableStateOf<String?>(null) }
 
+    // --- УДАЛЕНЫ состояния Pull-to-Refresh: ---
+    // val swipeRefreshState = rememberSwipeRefreshState(isRefreshing = isLoadingNews)
+    // --- КОНЕЦ УДАЛЕНИЯ ---
+
+    val fetchNews: suspend () -> Unit = {
+        isLoadingNews = true // Показываем индикатор загрузки
+        newsError = null
+        val loadedNews = newsRepository.getCurfewNews()
+        newsItems.clear()
+        if (loadedNews.isNotEmpty()) {
+            newsItems.addAll(loadedNews)
+        } else {
+            newsError = "Не удалось загрузить новости. Проверьте подключение к Интернету или источник новостей."
+            Toast.makeText(context, newsError, Toast.LENGTH_SHORT).show()
+        }
+        isLoadingNews = false // Скрываем индикатор загрузки
+    }
+
     val saveNotificationConfigs = {
         scope.launch {
             context.dataStore.edit { prefs ->
@@ -270,16 +294,7 @@ fun MainScreen(context: Context, mapLauncher: ActivityResultLauncher<Intent>) {
             notificationConfigs.addAll(loadedConfigs)
         }
 
-        // Загрузка новостей при старте
-        isLoadingNews = true
-        newsError = null
-        val loadedNews = newsRepository.getCurfewNews()
-        if (loadedNews.isNotEmpty()) {
-            newsItems.addAll(loadedNews)
-        } else {
-            newsError = "Не удалось загрузить новости. Проверьте подключение к Интернету или источник новостей."
-        }
-        isLoadingNews = false
+        fetchNews() // Инициальная загрузка новостей
     }
 
     Column(
@@ -313,20 +328,20 @@ fun MainScreen(context: Context, mapLauncher: ActivityResultLauncher<Intent>) {
             ) {
                 Text(
                     text = "Уведомления:",
-                    style = MaterialTheme.typography.headlineSmall // Используем новый стиль headlineSmall
+                    style = MaterialTheme.typography.headlineSmall
                 )
                 Button(onClick = {
                     if (notificationConfigs.isNotEmpty()) {
                         val randomConfig = notificationConfigs.random()
                         val serviceIntent = Intent(context, CurfewForegroundService::class.java).apply {
                             action = CurfewForegroundService.ACTION_EMULATE_NOTIFICATION
-                            // ИСПРАВЛЕНИЕ: Используем новое имя константы
                             putExtra(CurfewForegroundService.EXTRA_EMULATE_MINUTES_VALUE, randomConfig.minutesBefore)
                         }
                         ContextCompat.startForegroundService(context, serviceIntent)
                         Log.d("MainScreen", "Отправлен запрос на эмуляцию уведомления за ${randomConfig.minutesBefore} минут.")
                     } else {
                         Log.d("MainScreen", "Список уведомлений пуст, невозможно эмулировать.")
+                        Toast.makeText(context, "Список уведомлений пуст, добавьте новое.", Toast.LENGTH_SHORT).show()
                     }
                 }) {
                     Text("Эмул. увед.")
@@ -345,7 +360,7 @@ fun MainScreen(context: Context, mapLauncher: ActivityResultLauncher<Intent>) {
             if (notificationConfigs.isEmpty()) {
                 Text("Нажмите 'Добавить', чтобы установить время и текст уведомлений.", color = Color.Gray)
             } else {
-                LazyColumn(modifier = Modifier.heightIn(max = 200.dp)) { // Ограничиваем высоту для прокрутки
+                LazyColumn(modifier = Modifier.heightIn(max = 200.dp)) {
                     items(notificationConfigs.sortedByDescending { it.minutesBefore }) { config ->
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -387,7 +402,7 @@ fun MainScreen(context: Context, mapLauncher: ActivityResultLauncher<Intent>) {
                                 }
                             }
                         }
-                        HorizontalDivider() // Разделитель между элементами списка
+                        HorizontalDivider()
                     }
                 }
             }
@@ -397,28 +412,40 @@ fun MainScreen(context: Context, mapLauncher: ActivityResultLauncher<Intent>) {
         Spacer(modifier = Modifier.height(16.dp))
         Text(
             text = "Новости:",
-            style = MaterialTheme.typography.headlineSmall // Используем новый стиль headlineSmall
+            style = MaterialTheme.typography.headlineSmall
         )
 
+        // --- ИСПРАВЛЕНИЕ: Добавление кнопки "Обновить новости" ---
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.End // Выравниваем кнопку по правому краю
+        ) {
+            Button(onClick = { scope.launch { fetchNews() } }) {
+                Text("Обновить новости")
+            }
+        }
+        // --- КОНЕЦ ИСПРАВЛЕНИЯ ---
+
+
+        // Отображение состояния загрузки/ошибки/пустого списка
         when {
             isLoadingNews -> CircularProgressIndicator(modifier = Modifier.align(Alignment.CenterHorizontally))
-            newsError != null -> Text(newsError!!, color = MaterialTheme.colorScheme.error)
-            newsItems.isEmpty() -> Text("Нет новостей о комендантском часе.", color = Color.Gray)
+            newsError != null -> Text(newsError!!, color = MaterialTheme.colorScheme.error, modifier = Modifier.align(Alignment.CenterHorizontally))
+            newsItems.isEmpty() -> Text("Нет новостей для отображения.", color = Color.Gray, modifier = Modifier.align(Alignment.CenterHorizontally))
             else -> {
-                LazyColumn(
-                    modifier = Modifier.weight(1f) // Занимаем оставшееся пространство
-                ) {
+                LazyColumn(modifier = Modifier.fillMaxSize()) {
                     items(newsItems) { news ->
                         NewsItem(news = news, context = context)
-                        HorizontalDivider() // Разделитель между новостями
+                        HorizontalDivider()
                     }
                 }
             }
         }
 
-        ClickableText(
-            text = AnnotatedString("ver. 0.1 by monekx"),
-            onClick = {},
+
+        // Текст версии приложения (находится вне LazyColumn)
+        Text( // Используем обычный Text
+            text = "ver. 0.1 by monekx",
             modifier = Modifier
                 .align(Alignment.CenterHorizontally)
                 .padding(bottom = 8.dp),
@@ -573,55 +600,47 @@ fun NewsItem(news: RssItem, context: Context) {
             modifier = Modifier
                 .padding(16.dp)
                 .clickable {
-                    // Открываем ссылку в браузере при клике на весь элемент Card
                     news.link?.let { url ->
-                        Log.d("NewsItem", "Клик по новости. URL: $url")
+                        Log.d("NewsItem", "Клик по новости. Открытие в WebView: $url")
                         try {
-                            // Убедимся, что URL не пустой и является валидным URI
-                            if (url.isNotBlank() && Uri.parse(url) != null) {
-                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
-                                // Важно: Проверить, есть ли приложение, которое может обработать этот Intent
-                                if (intent.resolveActivity(context.packageManager) != null) {
-                                    ContextCompat.startActivity(context, intent, null)
-                                    Log.d("NewsItem", "Ссылка успешно открыта.")
-                                } else {
-                                    Log.e("NewsItem", "Нет приложения для открытия URL: $url")
-                                    // Можно показать Toast пользователю: "Нет браузера для открытия ссылки"
+                            if (url.isNotBlank()) {
+                                val intent = Intent(context, WebViewActivity::class.java).apply {
+                                    putExtra(WebViewActivity.EXTRA_URL, url)
+                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                                 }
+                                ContextCompat.startActivity(context, intent, null)
                             } else {
                                 Log.e("NewsItem", "Некорректный или пустой URL новости: '$url'")
+                                Toast.makeText(context, "Некорректная ссылка на новость.", Toast.LENGTH_SHORT).show()
                             }
                         } catch (e: Exception) {
-                            Log.e("NewsItem", "Ошибка при открытии ссылки: $url", e)
-                            // Можно показать Toast пользователю: "Не удалось открыть ссылку"
+                            Log.e("NewsItem", "Ошибка при открытии ссылки в WebView: $url", e)
+                            Toast.makeText(context, "Не удалось открыть новость.", Toast.LENGTH_SHORT).show()
                         }
                     } ?: Log.e("NewsItem", "Ссылка новости равна null.")
                 }
         ) {
             Text(
                 text = news.title ?: "Без заголовка",
-                style = MaterialTheme.typography.titleMedium, // Используем новый стиль titleMedium
-                color = MaterialTheme.colorScheme.primary // Цвет заголовка новости
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.primary
             )
             Spacer(modifier = Modifier.height(4.dp))
             news.description?.let { desc ->
-                // HTML-описание может содержать теги, которые нужно обработать
-                // Для простоты пока обрезаем, но можно использовать HtmlCompat.fromHtml
                 Text(
                     text = desc.take(150) + if (desc.length > 150) "..." else "",
-                    style = MaterialTheme.typography.bodyMedium, // Используем новый стиль bodyMedium
+                    style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
             news.pubDate?.let { date ->
                 Text(
                     text = date,
-                    style = MaterialTheme.typography.bodySmall, // Используем новый стиль bodySmall
+                    style = MaterialTheme.typography.bodySmall,
                     color = Color.Gray,
                     modifier = Modifier.align(Alignment.End)
                 )
             }
-            // Отдельная кликабельная ссылка "Читать далее"
             news.link?.let { url ->
                 val annotatedText = buildAnnotatedString {
                     append("Читать далее")
@@ -637,21 +656,21 @@ fun NewsItem(news: RssItem, context: Context) {
                 ClickableText(
                     text = annotatedText,
                     onClick = {
-                        Log.d("NewsItem", "Клик по 'Читать далее'. URL: $url")
+                        Log.d("NewsItem", "Клик по 'Читать далее'. Открытие в WebView: $url")
                         try {
-                            if (url.isNotBlank() && Uri.parse(url) != null) {
-                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
-                                if (intent.resolveActivity(context.packageManager) != null) {
-                                    ContextCompat.startActivity(context, intent, null)
-                                    Log.d("NewsItem", "Ссылка 'Читать далее' успешно открыта.")
-                                } else {
-                                    Log.e("NewsItem", "Нет приложения для открытия URL (Читать далее): $url")
+                            if (url.isNotBlank()) {
+                                val intent = Intent(context, WebViewActivity::class.java).apply {
+                                    putExtra(WebViewActivity.EXTRA_URL, url)
+                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                                 }
+                                ContextCompat.startActivity(context, intent, null)
                             } else {
                                 Log.e("NewsItem", "Некорректный или пустой URL для 'Читать далее': '$url'")
+                                Toast.makeText(context, "Некорректная ссылка на новость.", Toast.LENGTH_SHORT).show()
                             }
                         } catch (e: Exception) {
-                            Log.e("NewsItem", "Ошибка при открытии ссылки 'Читать далее': $url", e)
+                            Log.e("NewsItem", "Ошибка при открытии ссылки 'Читать далее' в WebView: $url", e)
+                            Toast.makeText(context, "Не удалось открыть новость.", Toast.LENGTH_SHORT).show()
                         }
                     },
                     modifier = Modifier.align(Alignment.End),
