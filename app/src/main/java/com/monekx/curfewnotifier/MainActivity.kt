@@ -4,15 +4,20 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.PowerManager
 import android.provider.Settings
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.ClickableText
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
@@ -23,9 +28,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
@@ -43,43 +52,42 @@ import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import android.app.NotificationChannel
 import android.app.NotificationManager
-import android.app.PendingIntent // Добавляем PendingIntent
-import android.util.Log
+import android.app.PendingIntent
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.core.app.NotificationCompat // Добавляем NotificationCompat
+import com.monekx.curfewnotifier.data.RssItem
+import com.monekx.curfewnotifier.repository.NewsRepository
 import com.monekx.curfewnotifier.ui.theme.CurfewNotifierTheme
 
-
-// Добавляем класс для представления данных уведомления
+// Класс для представления данных уведомления
 data class NotificationConfig(
     val minutesBefore: Int,
     val message: String,
-    var enabled: Boolean = true // Добавляем состояние включения/выключения
+    var enabled: Boolean = true
 )
 
-// Используем dataStore, как и раньше
+// DataStore для настроек
 val Context.dataStore by preferencesDataStore(name = "settings")
 
-// Ключ для хранения набора конфигураций уведомлений (будем хранить как JSON строку)
+// Ключ для хранения набора конфигураций уведомлений
 val NOTIFICATION_CONFIGS_KEY = stringPreferencesKey("notification_configs")
 
-// Инициализируем Gson для сериализации/десериализации JSON
+// Инициализируем Gson
 val gson = Gson()
 
 class MainActivity : ComponentActivity() {
 
     companion object {
-        private const val REQUEST_CODE = 1001
-        private const val TEST_NOTIFICATION_ID = 9999 // ID для тестовых уведомлений
+        private const val REQUEST_CODE_NOTIFICATIONS = 1001
     }
 
     private lateinit var mapLauncher: ActivityResultLauncher<Intent>
+    private lateinit var locationPermissionLauncher: ActivityResultLauncher<Array<String>>
+    private lateinit var notificationPermissionLauncher: ActivityResultLauncher<String>
 
     @SuppressLint("BatteryLife")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Создаем канал уведомлений (если он еще не создан)
         createNotificationChannel()
 
         val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
@@ -90,14 +98,35 @@ class MainActivity : ComponentActivity() {
             startActivity(intent)
         }
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-                requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), REQUEST_CODE)
+        locationPermissionLauncher = registerForActivityResult(
+            ActivityResultContracts.RequestMultiplePermissions()
+        ) { permissions ->
+            val fineLocationGranted = permissions[android.Manifest.permission.ACCESS_FINE_LOCATION] ?: false
+            val coarseLocationGranted = permissions[android.Manifest.permission.ACCESS_COARSE_LOCATION] ?: false
+
+            if (fineLocationGranted || coarseLocationGranted) {
+                Log.d("MainActivity", "Разрешение на местоположение получено.")
+                startLocationService()
+            } else {
+                Log.w("MainActivity", "Разрешение на местоположение отклонено. Сервис не будет запущен.")
             }
         }
 
-        val serviceIntent = Intent(this, CurfewForegroundService::class.java)
-        startForegroundService(serviceIntent)
+        notificationPermissionLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted: Boolean ->
+            if (isGranted) {
+                Log.d("MainActivity", "Разрешение на POST_NOTIFICATIONS получено.")
+            } else {
+                Log.w("MainActivity", "Разрешение на POST_NOTIFICATIONS отклонено. Уведомления могут не отображаться.")
+            }
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (ContextCompat.checkSelfPermission(this, android.Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                notificationPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
+
+        checkAndRequestLocationPermissions()
 
         mapLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
             if (result.resultCode == RESULT_OK) {
@@ -129,7 +158,6 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // --- НОВАЯ ФУНКЦИЯ: Создание канала уведомлений (если еще не создан) ---
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val name = "Curfew Notifier"
@@ -143,42 +171,37 @@ class MainActivity : ComponentActivity() {
             notificationManager.createNotificationChannel(channel)
         }
     }
-    // --- КОНЕЦ НОВОЙ ФУНКЦИИ ---
 
-    // --- НОВАЯ ФУНКЦИЯ: Отправка тестового уведомления ---
-    fun sendTestNotification(context: Context, minutesBefore: Int, message: String) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-                Log.w("MainActivity", "Нет разрешения на POST_NOTIFICATIONS для тестового уведомления.")
-                // Можно запросить разрешение здесь, но лучше сделать это при старте приложения
-                return
-            }
+    private fun checkAndRequestLocationPermissions() {
+        val fineLocationPermission = ContextCompat.checkSelfPermission(
+            this,
+            android.Manifest.permission.ACCESS_FINE_LOCATION
+        ) == PackageManager.PERMISSION_GRANTED
+
+        val coarseLocationPermission = ContextCompat.checkSelfPermission(
+            this,
+            android.Manifest.permission.ACCESS_COARSE_LOCATION
+        ) == PackageManager.PERMISSION_GRANTED
+
+        if (fineLocationPermission || coarseLocationPermission) {
+            Log.d("MainActivity", "Разрешения на местоположение уже есть.")
+            startLocationService()
+        } else {
+            Log.d("MainActivity", "Запрашиваем разрешения на местоположение.")
+            locationPermissionLauncher.launch(
+                arrayOf(
+                    android.Manifest.permission.ACCESS_FINE_LOCATION,
+                    android.Manifest.permission.ACCESS_COARSE_LOCATION
+                )
+            )
         }
-
-        val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        val notificationIntent = Intent(context, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
-        }
-        val pendingIntent: PendingIntent = PendingIntent.getActivity(
-            context, 0, notificationIntent,
-            PendingIntent.FLAG_IMMUTABLE
-        )
-
-        val notification = NotificationCompat.Builder(context, "CurfewNotifierChannel")
-            .setContentTitle("ТЕСТ: Напоминание о комендантском часе")
-            .setContentText(message.ifBlank { "Тестовое уведомление за $minutesBefore минут." })
-            .setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setAutoCancel(true)
-            .setContentIntent(pendingIntent) // Добавляем ContentIntent
-            .build()
-
-        // Используем уникальный ID для тестовых уведомлений, чтобы не конфликтовать с сервисными
-        // и чтобы каждое новое тестовое уведомление отображалось отдельно.
-        notificationManager.notify(TEST_NOTIFICATION_ID + minutesBefore, notification)
-        Log.d("MainActivity", "Отправлено тестовое уведомление: '$message' за $minutesBefore минут.")
     }
-    // --- КОНЕЦ НОВОЙ ФУНКЦИИ ---
+
+    private fun startLocationService() {
+        Log.d("MainActivity", "Попытка запуска CurfewForegroundService.")
+        val serviceIntent = Intent(this, CurfewForegroundService::class.java)
+        ContextCompat.startForegroundService(this, serviceIntent)
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -225,6 +248,12 @@ fun MainScreen(context: Context, mapLauncher: ActivityResultLauncher<Intent>) {
     var editInputMessage by remember { mutableStateOf("") }
     var editInputError by remember { mutableStateOf(false) }
 
+    // Состояние для новостей
+    val newsItems = remember { mutableStateListOf<RssItem>() }
+    val newsRepository = remember { NewsRepository() }
+    var isLoadingNews by remember { mutableStateOf(false) }
+    var newsError by remember { mutableStateOf<String?>(null) }
+
     val saveNotificationConfigs = {
         scope.launch {
             context.dataStore.edit { prefs ->
@@ -240,6 +269,17 @@ fun MainScreen(context: Context, mapLauncher: ActivityResultLauncher<Intent>) {
             val loadedConfigs: List<NotificationConfig> = gson.fromJson(savedJson, type)
             notificationConfigs.addAll(loadedConfigs)
         }
+
+        // Загрузка новостей при старте
+        isLoadingNews = true
+        newsError = null
+        val loadedNews = newsRepository.getCurfewNews()
+        if (loadedNews.isNotEmpty()) {
+            newsItems.addAll(loadedNews)
+        } else {
+            newsError = "Не удалось загрузить новости. Проверьте подключение к Интернету или источник новостей."
+        }
+        isLoadingNews = false
     }
 
     Column(
@@ -271,21 +311,26 @@ fun MainScreen(context: Context, mapLauncher: ActivityResultLauncher<Intent>) {
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("Уведомления:", fontWeight = FontWeight.SemiBold)
-                // --- НОВАЯ КНОПКА: Триггер случайного уведомления ---
+                Text(
+                    text = "Уведомления:",
+                    style = MaterialTheme.typography.headlineSmall // Используем новый стиль headlineSmall
+                )
                 Button(onClick = {
                     if (notificationConfigs.isNotEmpty()) {
-                        val randomConfig = notificationConfigs.random() // Выбираем случайную конфигурацию
-                        // Вызываем функцию отправки тестового уведомления из MainActivity
-                        (context as? MainActivity)?.sendTestNotification(context, randomConfig.minutesBefore, randomConfig.message)
+                        val randomConfig = notificationConfigs.random()
+                        val serviceIntent = Intent(context, CurfewForegroundService::class.java).apply {
+                            action = CurfewForegroundService.ACTION_EMULATE_NOTIFICATION
+                            // ИСПРАВЛЕНИЕ: Используем новое имя константы
+                            putExtra(CurfewForegroundService.EXTRA_EMULATE_MINUTES_VALUE, randomConfig.minutesBefore)
+                        }
+                        ContextCompat.startForegroundService(context, serviceIntent)
+                        Log.d("MainScreen", "Отправлен запрос на эмуляцию уведомления за ${randomConfig.minutesBefore} минут.")
                     } else {
-                        // Опционально: показать сообщение, если список уведомлений пуст
-                        Log.d("MainScreen", "Список уведомлений пуст, невозможно отправить тестовое.")
+                        Log.d("MainScreen", "Список уведомлений пуст, невозможно эмулировать.")
                     }
                 }) {
-                    Text("Тест увед.")
+                    Text("Эмул. увед.")
                 }
-                // --- КОНЕЦ НОВОЙ КНОПКИ ---
 
                 Button(onClick = {
                     inputMinutes = ""
@@ -300,52 +345,76 @@ fun MainScreen(context: Context, mapLauncher: ActivityResultLauncher<Intent>) {
             if (notificationConfigs.isEmpty()) {
                 Text("Нажмите 'Добавить', чтобы установить время и текст уведомлений.", color = Color.Gray)
             } else {
-                notificationConfigs.sortedByDescending { it.minutesBefore }.forEach { config ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Column {
-                            Text("за ${config.minutesBefore} минут")
-                            if (config.message.isNotBlank()) {
-                                Text(config.message, fontSize = 12.sp, color = Color.Gray)
-                            }
-                        }
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Switch(
-                                checked = config.enabled,
-                                onCheckedChange = { isChecked ->
-                                    val index = notificationConfigs.indexOfFirst { it.minutesBefore == config.minutesBefore }
-                                    if (index != -1) {
-                                        notificationConfigs[index] = config.copy(enabled = isChecked)
-                                        saveNotificationConfigs()
-                                    }
+                LazyColumn(modifier = Modifier.heightIn(max = 200.dp)) { // Ограничиваем высоту для прокрутки
+                    items(notificationConfigs.sortedByDescending { it.minutesBefore }) { config ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column {
+                                Text("за ${config.minutesBefore} минут", style = MaterialTheme.typography.bodyLarge)
+                                if (config.message.isNotBlank()) {
+                                    Text(config.message, style = MaterialTheme.typography.bodyMedium, color = Color.Gray)
                                 }
-                            )
-                            Spacer(Modifier.width(8.dp))
-                            IconButton(onClick = {
-                                editingConfig = config
-                                editInputMinutes = config.minutesBefore.toString()
-                                editInputMessage = config.message
-                                editInputError = false
-                                showEditDialog = true
-                            }) {
-                                Icon(Icons.Default.Edit, contentDescription = "Редактировать")
                             }
-                            IconButton(onClick = {
-                                notificationConfigs.remove(config)
-                                saveNotificationConfigs()
-                            }) {
-                                Icon(Icons.Default.Delete, contentDescription = "Удалить")
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Switch(
+                                    checked = config.enabled,
+                                    onCheckedChange = { isChecked ->
+                                        val index = notificationConfigs.indexOfFirst { it.minutesBefore == config.minutesBefore }
+                                        if (index != -1) {
+                                            notificationConfigs[index] = config.copy(enabled = isChecked)
+                                            saveNotificationConfigs()
+                                        }
+                                    }
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                IconButton(onClick = {
+                                    editingConfig = config
+                                    editInputMinutes = config.minutesBefore.toString()
+                                    editInputMessage = config.message
+                                    editInputError = false
+                                    showEditDialog = true
+                                }) {
+                                    Icon(Icons.Default.Edit, contentDescription = "Редактировать")
+                                }
+                                IconButton(onClick = {
+                                    notificationConfigs.remove(config)
+                                    saveNotificationConfigs()
+                                }) {
+                                    Icon(Icons.Default.Delete, contentDescription = "Удалить")
+                                }
                             }
                         }
+                        HorizontalDivider() // Разделитель между элементами списка
                     }
                 }
             }
         }
 
-        Spacer(modifier = Modifier.weight(1f))
+        // Раздел новостей
+        Spacer(modifier = Modifier.height(16.dp))
+        Text(
+            text = "Новости:",
+            style = MaterialTheme.typography.headlineSmall // Используем новый стиль headlineSmall
+        )
+
+        when {
+            isLoadingNews -> CircularProgressIndicator(modifier = Modifier.align(Alignment.CenterHorizontally))
+            newsError != null -> Text(newsError!!, color = MaterialTheme.colorScheme.error)
+            newsItems.isEmpty() -> Text("Нет новостей о комендантском часе.", color = Color.Gray)
+            else -> {
+                LazyColumn(
+                    modifier = Modifier.weight(1f) // Занимаем оставшееся пространство
+                ) {
+                    items(newsItems) { news ->
+                        NewsItem(news = news, context = context)
+                        HorizontalDivider() // Разделитель между новостями
+                    }
+                }
+            }
+        }
 
         ClickableText(
             text = AnnotatedString("ver. 0.1 by monekx"),
@@ -353,15 +422,14 @@ fun MainScreen(context: Context, mapLauncher: ActivityResultLauncher<Intent>) {
             modifier = Modifier
                 .align(Alignment.CenterHorizontally)
                 .padding(bottom = 8.dp),
-            style = LocalTextStyle.current.copy(color = Color.Gray, fontSize = 12.sp)
+            style = MaterialTheme.typography.labelSmall.copy(color = Color.Gray)
         )
     }
 
-    // --- Диалоговое окно для ДОБАВЛЕНИЯ нового времени и сообщения ---
     if (showAddDialog) {
         AlertDialog(
             onDismissRequest = { showAddDialog = false },
-            title = { Text("Добавить уведомление") },
+            title = { Text("Добавить уведомление", style = MaterialTheme.typography.titleLarge) },
             text = {
                 Column {
                     OutlinedTextField(
@@ -420,11 +488,10 @@ fun MainScreen(context: Context, mapLauncher: ActivityResultLauncher<Intent>) {
         )
     }
 
-    // --- Диалоговое окно для РЕДАКТИРОВАНИЯ существующего уведомления ---
     if (showEditDialog && editingConfig != null) {
         AlertDialog(
             onDismissRequest = { showEditDialog = false },
-            title = { Text("Редактировать уведомление") },
+            title = { Text("Редактировать уведомление", style = MaterialTheme.typography.titleLarge) },
             text = {
                 Column {
                     OutlinedTextField(
@@ -490,5 +557,107 @@ fun MainScreen(context: Context, mapLauncher: ActivityResultLauncher<Intent>) {
                 }
             }
         )
+    }
+}
+
+// Composable для отображения отдельной новости
+@Composable
+fun NewsItem(news: RssItem, context: Context) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .padding(16.dp)
+                .clickable {
+                    // Открываем ссылку в браузере при клике на весь элемент Card
+                    news.link?.let { url ->
+                        Log.d("NewsItem", "Клик по новости. URL: $url")
+                        try {
+                            // Убедимся, что URL не пустой и является валидным URI
+                            if (url.isNotBlank() && Uri.parse(url) != null) {
+                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                                // Важно: Проверить, есть ли приложение, которое может обработать этот Intent
+                                if (intent.resolveActivity(context.packageManager) != null) {
+                                    ContextCompat.startActivity(context, intent, null)
+                                    Log.d("NewsItem", "Ссылка успешно открыта.")
+                                } else {
+                                    Log.e("NewsItem", "Нет приложения для открытия URL: $url")
+                                    // Можно показать Toast пользователю: "Нет браузера для открытия ссылки"
+                                }
+                            } else {
+                                Log.e("NewsItem", "Некорректный или пустой URL новости: '$url'")
+                            }
+                        } catch (e: Exception) {
+                            Log.e("NewsItem", "Ошибка при открытии ссылки: $url", e)
+                            // Можно показать Toast пользователю: "Не удалось открыть ссылку"
+                        }
+                    } ?: Log.e("NewsItem", "Ссылка новости равна null.")
+                }
+        ) {
+            Text(
+                text = news.title ?: "Без заголовка",
+                style = MaterialTheme.typography.titleMedium, // Используем новый стиль titleMedium
+                color = MaterialTheme.colorScheme.primary // Цвет заголовка новости
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            news.description?.let { desc ->
+                // HTML-описание может содержать теги, которые нужно обработать
+                // Для простоты пока обрезаем, но можно использовать HtmlCompat.fromHtml
+                Text(
+                    text = desc.take(150) + if (desc.length > 150) "..." else "",
+                    style = MaterialTheme.typography.bodyMedium, // Используем новый стиль bodyMedium
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            news.pubDate?.let { date ->
+                Text(
+                    text = date,
+                    style = MaterialTheme.typography.bodySmall, // Используем новый стиль bodySmall
+                    color = Color.Gray,
+                    modifier = Modifier.align(Alignment.End)
+                )
+            }
+            // Отдельная кликабельная ссылка "Читать далее"
+            news.link?.let { url ->
+                val annotatedText = buildAnnotatedString {
+                    append("Читать далее")
+                    addStyle(
+                        style = SpanStyle(
+                            color = MaterialTheme.colorScheme.tertiary,
+                            textDecoration = TextDecoration.Underline
+                        ),
+                        start = 0,
+                        end = length
+                    )
+                }
+                ClickableText(
+                    text = annotatedText,
+                    onClick = {
+                        Log.d("NewsItem", "Клик по 'Читать далее'. URL: $url")
+                        try {
+                            if (url.isNotBlank() && Uri.parse(url) != null) {
+                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                                if (intent.resolveActivity(context.packageManager) != null) {
+                                    ContextCompat.startActivity(context, intent, null)
+                                    Log.d("NewsItem", "Ссылка 'Читать далее' успешно открыта.")
+                                } else {
+                                    Log.e("NewsItem", "Нет приложения для открытия URL (Читать далее): $url")
+                                }
+                            } else {
+                                Log.e("NewsItem", "Некорректный или пустой URL для 'Читать далее': '$url'")
+                            }
+                        } catch (e: Exception) {
+                            Log.e("NewsItem", "Ошибка при открытии ссылки 'Читать далее': $url", e)
+                        }
+                    },
+                    modifier = Modifier.align(Alignment.End),
+                    style = MaterialTheme.typography.labelLarge.copy(color = MaterialTheme.colorScheme.tertiary)
+                )
+            }
+        }
     }
 }
