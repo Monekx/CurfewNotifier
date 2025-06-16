@@ -14,6 +14,8 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.core.booleanPreferencesKey // Добавляем этот импорт
+import androidx.datastore.preferences.core.edit // Добавляем этот импорт
 import com.google.android.gms.location.*
 import com.google.gson.reflect.TypeToken
 import com.monekx.curfewnotifier.MainActivity
@@ -34,6 +36,8 @@ import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.math.sqrt
+import java.time.LocalDateTime // Добавьте этот импорт
+import java.time.LocalDate // Добавьте этот импорт
 
 class CurfewForegroundService : Service() {
 
@@ -51,6 +55,9 @@ class CurfewForegroundService : Service() {
 
     private val sentNotificationsThisCycle = mutableSetOf<Int>()
     private var lastCurfewStatus: Boolean? = null // Отслеживаем изменение статуса комендантского часа
+
+    // Ключ для хранения статуса "дома/не дома"
+    private val IS_AT_HOME_KEY = booleanPreferencesKey("is_at_home")
 
     // Константы для Intent Action и Extra для эмуляции уведомлений
     companion object {
@@ -190,33 +197,30 @@ class CurfewForegroundService : Service() {
         val curfewEnd = LocalTime.of(5, 0)    // Конец комендантского часа
 
         while (serviceJob.isActive) {
-            val now = LocalTime.now()
-            val inCurfew = now.isAfter(curfewStart) || now.isBefore(curfewEnd)
+            val nowTime = LocalTime.now() // Изменил имя переменной для ясности
+            val currentDateTime = LocalDateTime.now() // Используем LocalDateTime для точных расчетов
+
+            val curfewStartToday = LocalDate.now().atTime(curfewStart)
+            val curfewEndToday = LocalDate.now().atTime(curfewEnd)
+            val curfewStartTomorrow = LocalDate.now().plusDays(1).atTime(curfewStart)
+            val curfewEndTomorrow = LocalDate.now().plusDays(1).atTime(curfewEnd)
+
+            val inCurfew: Boolean
+            val targetDateTime: LocalDateTime // Время, к которому мы ведем отсчет
+
+            if (currentDateTime.isAfter(curfewStartToday) || currentDateTime.isBefore(curfewEndToday)) {
+                inCurfew = true
+                targetDateTime = if (currentDateTime.isBefore(curfewEndToday)) curfewEndToday else curfewEndTomorrow
+            } else {
+                inCurfew = false
+                targetDateTime = if (currentDateTime.isBefore(curfewStartToday)) curfewStartToday else curfewStartTomorrow
+            }
 
             // Определяем ближайшее время комендантского часа для ОТОБРАЖЕНИЯ в основном уведомлении
-            val nearestCurfewTime: LocalTime
-            val curfewEventType: String // "Начало" или "Конец"
-
-            if (inCurfew) {
-                // Если сейчас комендантский час, то ближайшее событие - его конец
-                nearestCurfewTime = curfewEnd
-                curfewEventType = "Конец"
-            } else {
-                // Если комендантского часа нет, то ближайшее событие - его начало
-                nearestCurfewTime = curfewStart
-                curfewEventType = "Начало"
-            }
-            // Форматируем время для отображения (например, "23:00" или "05:00")
-            val formattedCurfewTime = nearestCurfewTime.format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"))
-
-            // Правильное вычисление nextCurfewStartTime для логики пользовательских уведомлений "за X минут"
-            // Эта переменная всегда указывает на *начало* следующего комендантского часа.
-            val nextCurfewStartTime = if (now.isAfter(curfewStart)) curfewStart.plusHours(24) else curfewStart
-
+            // Это время, которое будет отображаться в уведомлении Foreground Service
+            val formattedCurfewTime = targetDateTime.toLocalTime().format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"))
 
             // Логика сброса sentNotificationsThisCycle:
-            // Сбрасываем сет, когда статус меняется с "комендантский час" на "не комендантский час".
-            // Это сигнализирует о начале нового цикла ожидания до комендантского часа.
             if (lastCurfewStatus == true && !inCurfew) {
                 sentNotificationsThisCycle.clear()
                 Log.d("CurfewService", "Сет отправленных уведомлений очищен (начало нового цикла).")
@@ -224,67 +228,24 @@ class CurfewForegroundService : Service() {
             lastCurfewStatus = inCurfew
 
             // Проверяем, когда пользователь дома, и запрашиваем обновления местоположения
-            if (homeLat != 0.0 && homeLon != 0.0) { // Проверяем, что координаты дома установлены
-                if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
-                    val locationRequest = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 5000) // Обновляем каждые 5 секунд
-                        .setMinUpdateDistanceMeters(10f)
-                        .build()
-
-                    // Убедимся, что locationCallback создаётся и запрашивается только один раз
-                    // Если он уже зарегистрирован, не пытаемся регистрировать снова
-                    if (locationCallback == null) {
-                        locationCallback = object : LocationCallback() {
-                            override fun onLocationResult(locationResult: LocationResult) {
-                                locationResult.lastLocation?.let { location ->
-                                    val distance = calculateDistance(
-                                        homeLat, homeLon,
-                                        location.latitude, location.longitude
-                                    )
-                                    Log.d("CurfewService", "Расстояние до дома: ${String.format("%.2f", distance)}м")
-
-                                    val isUserAtHome = distance < 50.0
-                                    Log.d("CurfewService", "Пользователь дома: $isUserAtHome")
-
-                                    val homeStatusText = if (isUserAtHome) "Вы дома." else "Вы не дома."
-                                    val fullStatusText = "$homeStatusText $curfewEventType коменд.часа: $formattedCurfewTime"
-                                    updateNotification(createBaseNotification(fullStatusText))
-                                } ?: Log.w("CurfewService", "onLocationResult: lastLocation is null.")
-                            }
-                            override fun onLocationAvailability(p0: LocationAvailability) {
-                                Log.d("CurfewService", "Location availability: ${p0.isLocationAvailable}")
-                            }
-                        }
-                        // Вызов requestLocationUpdates должен быть в главном потоке (MainThread/Looper)
-                        withContext(Dispatchers.Main) {
-                            fusedLocationClient.requestLocationUpdates(locationRequest, locationCallback!!, null)
-                            Log.d("CurfewService", "Запрошены обновления местоположения в Main потоке.")
-                        }
-                    }
-                } else {
-                    Log.w("CurfewService", "Отсутствует разрешение ACCESS_FINE_LOCATION для запроса местоположения.")
-                }
-            } else {
-                Log.d("CurfewService", "Координаты дома не установлены, местоположение не отслеживается.")
-            }
+            // ... (остальной код, связанный с местоположением и обновлением уведомлений Foreground Service) ...
 
             // Логика для планирования уведомлений с кастомным текстом
             if (!inCurfew) { // Уведомления только до начала комендантского часа
-                val timeUntilCurfew = Duration.between(now, nextCurfewStartTime)
+                val timeUntilCurfew = Duration.between(currentDateTime, targetDateTime) // Используем currentDateTime и targetDateTime
 
                 notificationConfigs.forEach { config ->
                     if (config.enabled) { // Проверяем, включено ли уведомление
                         val minutesBeforeCurfew = config.minutesBefore
                         val threshold = Duration.ofMinutes(minutesBeforeCurfew.toLong())
 
-                        // Проверяем, находимся ли мы в окне уведомления (минута срабатывания)
-                        // и не было ли оно уже отправлено в этом цикле.
                         if (timeUntilCurfew <= threshold && timeUntilCurfew > Duration.ofMinutes(minutesBeforeCurfew.toLong() - 1)) {
                             if (!sentNotificationsThisCycle.contains(minutesBeforeCurfew)) {
                                 val notificationMessage = config.message.ifBlank {
                                     "До комендантского часа осталось ${minutesBeforeCurfew} минут!"
                                 }
                                 sendNotification(notificationMessage, minutesBeforeCurfew)
-                                sentNotificationsThisCycle.add(minutesBeforeCurfew) // Добавляем в сет, чтобы не спамить
+                                sentNotificationsThisCycle.add(minutesBeforeCurfew)
                                 Log.d("CurfewService", "Уведомление '${minutesBeforeCurfew} мин.' отправлено и добавлено в сет.")
                             } else {
                                 Log.d("CurfewService", "Уведомление '${minutesBeforeCurfew} мин.' уже было отправлено в этом цикле. Пропускаем.")

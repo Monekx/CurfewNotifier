@@ -84,11 +84,11 @@ private val DarkColorScheme = darkColorScheme(
 
 // Обновленные формы с более заметными скруглениями
 private val AppShapes = Shapes(
-    extraSmall = RoundedCornerShape(4.dp),
-    small = RoundedCornerShape(8.dp),
-    medium = RoundedCornerShape(12.dp),
-    large = RoundedCornerShape(16.dp),
-    extraLarge = RoundedCornerShape(28.dp)
+    extraSmall = RoundedCornerShape(8.dp), // Увеличиваем скругление
+    small = RoundedCornerShape(12.dp),    // Увеличиваем скругление
+    medium = RoundedCornerShape(16.dp),   // Увеличиваем скругление
+    large = RoundedCornerShape(20.dp),    // Увеличиваем скругление
+    extraLarge = RoundedCornerShape(32.dp) // Увеличиваем скругление
 )
 
 @Composable
@@ -123,7 +123,7 @@ fun CurfewNotifierTheme(
     MaterialTheme(
         colorScheme = colorScheme, // Используем выбранную цветовую схему
         typography = AppTypography,
-        shapes = AppShapes,
+        shapes = AppShapes, // Используем обновленные формы
         content = content
     )
 }

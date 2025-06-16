@@ -21,7 +21,10 @@ data class RssItem @JvmOverloads constructor(
 
     @field:Element(name = "pubDate", required = false)
     @param:Element(name = "pubDate", required = false)
-    var pubDate: String? = null
+    var pubDate: String? = null,
+
+    // НОВОЕ ПОЛЕ: для хранения URL изображения, спарсенного из HTML
+    var imageUrl: String? = null
 )
 
 // Модель для элемента <channel> в RSS-ленте

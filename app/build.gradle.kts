@@ -17,6 +17,7 @@ android {
 
             val appName = "CurfewNotifier"
             val buildType = variant.buildType.name
+
             val versionName = variant.versionName
 
             // Вытаскиваем ABI (если используешь splits.abi)
@@ -26,6 +27,7 @@ android {
             output.outputFileName = "${appName}_${buildType}${abiSuffix}_v${versionName}.apk"
         }
     }
+
 
     defaultConfig {
         applicationId = "com.monekx.curfewnotifier"
@@ -40,6 +42,7 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = false
+
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -50,6 +53,7 @@ android {
     splits {
         // Доступ к конфигурации ABI
         abi {
+
             // Включаем разделение по ABI
             isEnable = true // Используем присваивание
 
@@ -60,12 +64,14 @@ android {
             // Используем setIncludes с listOf для явного указания
             include(
 
-                    "armeabi-v7a",
-                    "arm64-v8a",
-                    "x86",
-                    "x86_64"
+
+                "armeabi-v7a",
+                "arm64-v8a",
+                "x86",
+                "x86_64"
 
             )
+
 
             // Отключить создание универсального APK, чтобы получить отдельные APK
             isUniversalApk = true // Используем присваивание с префиксом 'is'
@@ -80,6 +86,7 @@ android {
         jvmTarget = "11"
     }
     buildFeatures {
+
         compose = true
         viewBinding = true
     }
@@ -95,13 +102,27 @@ dependencies {
     }
     implementation("com.google.android.gms:play-services-location:21.3.0")
     implementation("com.google.code.gson:gson:2.11.0")
-    implementation("org.osmdroid:osmdroid-android:6.1.20") // Последняя стабильная версия может отличаться
-    implementation("org.osmdroid:osmdroid-wms:6.1.20")
-    implementation(libs.androidx.datastore.preferences) // или самая свежая версия
-    implementation(libs.androidx.core.ktx)
+    // Возвращено к версии osmdroid из libs.versions.toml
+    implementation("org.osmdroid:osmdroid-android:6.1.14") //
+    implementation("org.osmdroid:osmdroid-wms:6.1.14")
+    implementation(libs.androidx.datastore.preferences)
+
+    // Позволяем Compose BOM управлять версией navigation-compose
+    implementation("androidx.navigation:navigation-compose:2.7.0")
+
+    // Позволяем Compose BOM управлять версией material-icons-extended
+    implementation("androidx.compose.material:material-icons-extended")
+
+    // Accompanist dependencies
+    implementation("com.google.accompanist:accompanist-swiperefresh:0.32.0")
+
+    // Coil для загрузки изображений
+    implementation("io.coil-kt:coil-compose:2.6.0")
+    implementation("org.jsoup:jsoup:1.17.2") // Или последняя стабильная версия
+    implementation(libs.androidx.core.ktx) //
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.activity.compose)
-    implementation(platform(libs.androidx.compose.bom))
+    implementation(platform(libs.androidx.compose.bom)) // Сохраняем это для управления версиями Compose
     implementation(libs.androidx.ui)
     implementation(libs.androidx.ui.graphics)
     implementation(libs.androidx.ui.tooling.preview)
