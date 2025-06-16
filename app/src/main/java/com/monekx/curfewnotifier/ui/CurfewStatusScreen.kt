@@ -191,7 +191,7 @@ fun CurfewStatusScreen() {
 
         Spacer(modifier = Modifier.weight(1f))
         Text(
-            text = "ver. 0.2b by monekx",
+            text = "ver. 0.4b by monekx",
             style = MaterialTheme.typography.labelSmall.copy(color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)),
             modifier = Modifier.padding(bottom = 8.dp)
         )

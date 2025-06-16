@@ -33,8 +33,8 @@ android {
         applicationId = "com.monekx.curfewnotifier"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2
-        versionName = "0.2b"
+        versionCode = 4
+        versionName = "0.4b"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
