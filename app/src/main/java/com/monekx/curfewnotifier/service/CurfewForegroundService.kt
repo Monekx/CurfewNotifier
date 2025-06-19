@@ -8,14 +8,15 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.location.Location
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
-import androidx.datastore.preferences.core.booleanPreferencesKey // Добавляем этот импорт
-import androidx.datastore.preferences.core.edit // Добавляем этот импорт
+import androidx.datastore.preferences.core.booleanPreferencesKey
+import androidx.datastore.preferences.core.edit
 import com.google.android.gms.location.*
 import com.google.gson.reflect.TypeToken
 import com.monekx.curfewnotifier.MainActivity
@@ -36,8 +37,15 @@ import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.math.sqrt
-import java.time.LocalDateTime // Добавьте этот импорт
-import java.time.LocalDate // Добавьте этот импорт
+import java.time.LocalDateTime
+import java.time.LocalDate
+
+import com.monekx.curfewnotifier.CURFEW_START_HOUR_KEY
+import com.monekx.curfewnotifier.CURFEW_START_MINUTE_KEY
+import com.monekx.curfewnotifier.CURFEW_END_HOUR_KEY
+import com.monekx.curfewnotifier.CURFEW_END_MINUTE_KEY
+import com.monekx.curfewnotifier.HOME_RADIUS_METERS_KEY
+
 
 class CurfewForegroundService : Service() {
 
@@ -45,6 +53,8 @@ class CurfewForegroundService : Service() {
     private var locationCallback: LocationCallback? = null
     private var homeLat: Double = 0.0
     private var homeLon: Double = 0.0
+    @Volatile
+    private var homeRadiusMeters: Int = 50
     private var serviceJob = Job()
     private val serviceScope = CoroutineScope(Dispatchers.IO + serviceJob)
 
@@ -54,15 +64,22 @@ class CurfewForegroundService : Service() {
     private var notificationConfigs: List<NotificationConfig> = emptyList()
 
     private val sentNotificationsThisCycle = mutableSetOf<Int>()
-    private var lastCurfewStatus: Boolean? = null // Отслеживаем изменение статуса комендантского часа
+    private var lastCurfewStatus: Boolean? = null
 
-    // Ключ для хранения статуса "дома/не дома"
     private val IS_AT_HOME_KEY = booleanPreferencesKey("is_at_home")
 
-    // Константы для Intent Action и Extra для эмуляции уведомлений
+    @Volatile
+    private var curfewStartHour: Int = 23
+    @Volatile
+    private var curfewStartMinute: Int = 0
+    @Volatile
+    private var curfewEndHour: Int = 5
+    @Volatile
+    private var curfewEndMinute: Int = 0
+
     companion object {
         const val ACTION_EMULATE_NOTIFICATION = "com.monekx.curfewnotifier.EMULATE_NOTIFICATION"
-        const val EXTRA_EMULATE_MINUTES_VALUE = "extra_emulate_minutes_value" // Обновлено
+        const val EXTRA_EMULATE_MINUTES_VALUE = "extra_emulate_minutes_value"
     }
 
     override fun onCreate() {
@@ -70,38 +87,69 @@ class CurfewForegroundService : Service() {
         createNotificationChannel()
         fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
 
-        startForeground(NOTIFICATION_ID, createBaseNotification("Сервис запущен").build())
+        startForeground(NOTIFICATION_ID, createBaseNotification(
+            "Сервис запущен",
+            "Загрузка времени...",
+            "Определение местоположения..."
+        ).build())
 
         serviceScope.launch {
-            loadHomeLocation()
-            loadNotificationConfigs() // Загружаем конфиги асинхронно
+            applicationContext.dataStore.data.first().let { prefs ->
+                val storedLatInt = prefs[intPreferencesKey("home_lat_int")]
+                val storedLonInt = prefs[intPreferencesKey("home_lon_int")]
+                if (storedLatInt != null && storedLonInt != null) {
+                    homeLat = storedLatInt / 1_000_000.0
+                    homeLon = storedLonInt / 1_000_000.0
+                }
+                homeRadiusMeters = prefs[HOME_RADIUS_METERS_KEY] ?: 50
+                curfewStartHour = prefs[CURFEW_START_HOUR_KEY] ?: 23
+                curfewStartMinute = prefs[CURFEW_START_MINUTE_KEY] ?: 0
+                curfewEndHour = prefs[CURFEW_END_HOUR_KEY] ?: 5
+                curfewEndMinute = prefs[CURFEW_END_MINUTE_KEY] ?: 0
+                Log.d("CurfewService", "Initial settings loaded: Home(${homeLat}, ${homeLon}) Radius: ${homeRadiusMeters}m, Curfew: ${curfewStartHour}:${curfewStartMinute} - ${curfewEndHour}:${curfewEndMinute}")
+            }
+
+            launch {
+                applicationContext.dataStore.data.collect { prefs ->
+                    val storedLatInt = prefs[intPreferencesKey("home_lat_int")]
+                    val storedLonInt = prefs[intPreferencesKey("home_lon_int")]
+                    if (storedLatInt != null && storedLonInt != null) {
+                        homeLat = storedLatInt / 1_000_000.0
+                        homeLon = storedLonInt / 1_000_000.0
+                    }
+                    homeRadiusMeters = prefs[HOME_RADIUS_METERS_KEY] ?: 50
+                    curfewStartHour = prefs[CURFEW_START_HOUR_KEY] ?: 23
+                    curfewStartMinute = prefs[CURFEW_START_MINUTE_KEY] ?: 0
+                    curfewEndHour = prefs[CURFEW_END_HOUR_KEY] ?: 5
+                    curfewEndMinute = prefs[CURFEW_END_MINUTE_KEY] ?: 0
+                    Log.d("CurfewService", "Settings updated from DataStore via collect: Home(${homeLat}, ${homeLon}) Radius: ${homeRadiusMeters}m, Curfew: ${curfewStartHour}:${curfewStartMinute} - ${curfewEndHour}:${curfewEndMinute}")
+                }
+            }
+
+            loadNotificationConfigs()
+
             startCurfewMonitoring()
+            startLocationUpdates()
         }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         Log.d("CurfewService", "onStartCommand вызван. Action: ${intent?.action}, Extras: ${intent?.extras}")
 
-        // Обработка Intent для эмуляции уведомления
         if (intent?.action == ACTION_EMULATE_NOTIFICATION) {
-            val emulateMinutes = intent.getIntExtra(EXTRA_EMULATE_MINUTES_VALUE, -1) // Обновлено
+            val emulateMinutes = intent.getIntExtra(EXTRA_EMULATE_MINUTES_VALUE, -1)
             if (emulateMinutes != -1) {
-                serviceScope.launch { // Запускаем корутину для асинхронной обработки
-                    Log.d("CurfewService", "Получен ACTION_EMULATE_NOTIFICATION. EmulateMinutes: $emulateMinutes. Ждем загрузки конфигов (если еще нет)...")
-                    // Гарантируем, что конфиги загружены, если вдруг этот Intent пришел очень рано
+                serviceScope.launch {
                     if (notificationConfigs.isEmpty()) {
-                        loadNotificationConfigs() // Перезагружаем/убеждаемся, что они загружены
-                        Log.d("CurfewService", "Конфигурации уведомлений были загружены по запросу эмуляции.")
+                        loadNotificationConfigs()
                     }
 
-                    // Теперь, когда конфиги гарантированно загружены, пытаемся эмулировать
                     val configToEmulate = notificationConfigs.find { it.minutesBefore == emulateMinutes }
                     if (configToEmulate != null && configToEmulate.enabled) {
                         val message = configToEmulate.message.ifBlank {
                             "Эмулированное уведомление за ${configToEmulate.minutesBefore} минут!"
                         }
                         sendNotification(message, configToEmulate.minutesBefore)
-                        Log.d("CurfewService", "Эмулированное уведомление отправлено: '$message'.")
                     } else {
                         Log.w("CurfewService", "Не удалось эмулировать: конфигурация не найдена или отключена для $emulateMinutes минут. Текущие конфиги: ${notificationConfigs.map { it.minutesBefore }}.")
                     }
@@ -109,7 +157,7 @@ class CurfewForegroundService : Service() {
             }
         }
 
-        return START_STICKY // Сервис будет перезапущен, если его убьет система
+        return START_STICKY
     }
 
     override fun onBind(intent: Intent?): IBinder? {
@@ -118,8 +166,7 @@ class CurfewForegroundService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
-        serviceJob.cancel() // Отменяем все корутины сервиса
-        // Удаляем обновления местоположения при уничтожении сервиса
+        serviceJob.cancel()
         if (locationCallback != null) {
             fusedLocationClient.removeLocationUpdates(locationCallback!!)
             Log.d("CurfewService", "Обновления местоположения остановлены.")
@@ -127,7 +174,6 @@ class CurfewForegroundService : Service() {
         Log.d("CurfewService", "Сервис остановлен.")
     }
 
-    // Создание канала уведомлений (для Android 8.0+)
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val name = "Curfew Notifier"
@@ -142,8 +188,11 @@ class CurfewForegroundService : Service() {
         }
     }
 
-    // Создание базового уведомления для Foreground Service
-    private fun createBaseNotification(contentText: String): NotificationCompat.Builder {
+    private fun createBaseNotification(
+        curfewStatusText: String,
+        timeRemainingText: String,
+        homeStatusText: String
+    ): NotificationCompat.Builder {
         val notificationIntent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
         }
@@ -154,32 +203,19 @@ class CurfewForegroundService : Service() {
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Curfew Notifier")
-            .setContentText(contentText)
-            .setSmallIcon(android.R.drawable.ic_lock_idle_alarm) // Пример иконки, замените на свою
+            .setContentText("$curfewStatusText. $timeRemainingText. $homeStatusText")
+            .setStyle(NotificationCompat.BigTextStyle()
+                .bigText("$curfewStatusText\n$timeRemainingText\n$homeStatusText"))
+            .setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
             .setContentIntent(pendingIntent)
-            .setOngoing(true) // Не позволяет пользователю смахнуть уведомление
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setOngoing(true)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
     }
 
-    // Загрузка сохраненных координат дома из DataStore
     private suspend fun loadHomeLocation() {
-        val latKey = intPreferencesKey("home_lat_int")
-        val lonKey = intPreferencesKey("home_lon_int")
-        val preferences = applicationContext.dataStore.data.first()
-
-        val storedLatInt = preferences[latKey]
-        val storedLonInt = preferences[lonKey]
-
-        if (storedLatInt != null && storedLonInt != null) {
-            homeLat = storedLatInt / 1_000_000.0
-            homeLon = storedLonInt / 1_000_000.0
-            Log.d("CurfewService", "Загружены координаты дома: $homeLat, $homeLon")
-        } else {
-            Log.w("CurfewService", "Координаты дома не найдены.")
-        }
+        // Локации теперь загружаются в onCreate через collect
     }
 
-    // Загрузка сохраненных конфигураций уведомлений из DataStore
     private suspend fun loadNotificationConfigs() {
         applicationContext.dataStore.data.first()[NOTIFICATION_CONFIGS_KEY]?.let { savedJson ->
             val type = object : TypeToken<List<NotificationConfig>>() {}.type
@@ -191,14 +227,13 @@ class CurfewForegroundService : Service() {
         }
     }
 
-    // Основная логика мониторинга комендантского часа и местоположения
     private suspend fun startCurfewMonitoring() {
-        val curfewStart = LocalTime.of(23, 0) // Начало комендантского часа
-        val curfewEnd = LocalTime.of(5, 0)    // Конец комендантского часа
-
         while (serviceJob.isActive) {
-            val nowTime = LocalTime.now() // Изменил имя переменной для ясности
-            val currentDateTime = LocalDateTime.now() // Используем LocalDateTime для точных расчетов
+            val curfewStart = LocalTime.of(curfewStartHour, curfewStartMinute)
+            val curfewEnd = LocalTime.of(curfewEndHour, curfewEndMinute)
+
+            val nowTime = LocalTime.now()
+            val currentDateTime = LocalDateTime.now()
 
             val curfewStartToday = LocalDate.now().atTime(curfewStart)
             val curfewEndToday = LocalDate.now().atTime(curfewEnd)
@@ -206,36 +241,59 @@ class CurfewForegroundService : Service() {
             val curfewEndTomorrow = LocalDate.now().plusDays(1).atTime(curfewEnd)
 
             val inCurfew: Boolean
-            val targetDateTime: LocalDateTime // Время, к которому мы ведем отсчет
+            val targetDateTime: LocalDateTime
 
-            if (currentDateTime.isAfter(curfewStartToday) || currentDateTime.isBefore(curfewEndToday)) {
-                inCurfew = true
-                targetDateTime = if (currentDateTime.isBefore(curfewEndToday)) curfewEndToday else curfewEndTomorrow
+            if (curfewStart.isBefore(curfewEnd)) {
+                inCurfew = currentDateTime.isAfter(curfewStartToday) && currentDateTime.isBefore(curfewEndToday)
+                targetDateTime = if (inCurfew) {
+                    curfewEndToday
+                } else if (currentDateTime.isBefore(curfewStartToday)) {
+                    curfewStartToday
+                } else {
+                    curfewStartTomorrow
+                }
             } else {
-                inCurfew = false
-                targetDateTime = if (currentDateTime.isBefore(curfewStartToday)) curfewStartToday else curfewStartTomorrow
+                inCurfew = currentDateTime.isAfter(curfewStartToday) || currentDateTime.isBefore(curfewEndToday)
+                targetDateTime = if (inCurfew) {
+                    if (currentDateTime.isAfter(curfewStartToday)) {
+                        curfewEndTomorrow
+                    } else {
+                        curfewEndToday
+                    }
+                } else {
+                    curfewStartToday
+                }
             }
 
-            // Определяем ближайшее время комендантского часа для ОТОБРАЖЕНИЯ в основном уведомлении
-            // Это время, которое будет отображаться в уведомлении Foreground Service
-            val formattedCurfewTime = targetDateTime.toLocalTime().format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"))
+            val remainingDuration = Duration.between(currentDateTime, targetDateTime)
+            val hours = remainingDuration.toHours()
+            val minutes = remainingDuration.toMinutes() % 60
+            val seconds = remainingDuration.seconds % 60
 
-            // Логика сброса sentNotificationsThisCycle:
+            val curfewStatusText = if (inCurfew) "Комендантский час активен" else "До комендантского часа"
+            val timeRemainingText = "Осталось: %02d:%02d:%02d".format(hours, minutes, seconds)
+
+
+            var homeStatusText = "Статус дома неизвестен"
+            // Используем data.first() для получения текущего значения из Flow
+            val isAtHome = applicationContext.dataStore.data.first()[IS_AT_HOME_KEY]
+            if (isAtHome != null) {
+                homeStatusText = if (isAtHome) "Вы дома" else "Вы не дома"
+            }
+
+            updateNotification(createBaseNotification(curfewStatusText, timeRemainingText, homeStatusText))
+
             if (lastCurfewStatus == true && !inCurfew) {
                 sentNotificationsThisCycle.clear()
                 Log.d("CurfewService", "Сет отправленных уведомлений очищен (начало нового цикла).")
             }
             lastCurfewStatus = inCurfew
 
-            // Проверяем, когда пользователь дома, и запрашиваем обновления местоположения
-            // ... (остальной код, связанный с местоположением и обновлением уведомлений Foreground Service) ...
-
-            // Логика для планирования уведомлений с кастомным текстом
-            if (!inCurfew) { // Уведомления только до начала комендантского часа
-                val timeUntilCurfew = Duration.between(currentDateTime, targetDateTime) // Используем currentDateTime и targetDateTime
+            if (!inCurfew) {
+                val timeUntilCurfew = Duration.between(currentDateTime, targetDateTime)
 
                 notificationConfigs.forEach { config ->
-                    if (config.enabled) { // Проверяем, включено ли уведомление
+                    if (config.enabled) {
                         val minutesBeforeCurfew = config.minutesBefore
                         val threshold = Duration.ofMinutes(minutesBeforeCurfew.toLong())
 
@@ -255,19 +313,16 @@ class CurfewForegroundService : Service() {
                 }
             }
 
-            delay(1000) // Проверяем каждую секунду
+            delay(1000)
         }
     }
 
-    // Обновление основного уведомления Foreground Service
     private fun updateNotification(notificationBuilder: NotificationCompat.Builder) {
         val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         notificationManager.notify(NOTIFICATION_ID, notificationBuilder.build())
     }
 
-    // Отправка индивидуального уведомления с кастомным текстом
     private fun sendNotification(message: String, notificationUniqueId: Int) {
-        // Проверяем разрешение на уведомления перед отправкой
         if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             Log.w("CurfewService", "Нет разрешения на POST_NOTIFICATIONS, уведомление не отправлено.")
             return
@@ -276,20 +331,64 @@ class CurfewForegroundService : Service() {
         val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Напоминание о комендантском часе")
-            .setContentText(message) // Используем кастомный текст
-            .setSmallIcon(android.R.drawable.ic_lock_idle_alarm) // Пример иконки, замените на свою
+            .setContentText(message)
+            .setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setAutoCancel(true) // Уведомление исчезнет после нажатия
+            .setAutoCancel(true)
             .build()
 
-        // Используем уникальный ID для каждого типа уведомления
         notificationManager.notify(NOTIFICATION_ID + notificationUniqueId, notification)
         Log.d("CurfewService", "Отправлено уведомление: '$message' (ID: ${NOTIFICATION_ID + notificationUniqueId}).")
     }
 
-    // Функция для расчета расстояния между двумя географическими точками (в метрах)
+    private fun startLocationUpdates() {
+        if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED &&
+            checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+            Log.w("CurfewService", "Нет разрешения на местоположение, обновления не будут запущены.")
+            return
+        }
+
+        val locationRequest = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 5000)
+            // .setWaitForActivityUpdates(false) // УДАЛЕНА эта строка
+            .setMinUpdateIntervalMillis(2000)
+            .build()
+
+        locationCallback = object : LocationCallback() {
+            override fun onLocationResult(locationResult: LocationResult) {
+                for (location in locationResult.locations) {
+                    Log.d("CurfewService", "Location update: ${location.latitude}, ${location.longitude}")
+                    if (homeLat != 0.0 || homeLon != 0.0) {
+                        val distance = calculateDistance(
+                            homeLat, homeLon,
+                            location.latitude, location.longitude
+                        )
+                        val isUserAtHome = distance <= homeRadiusMeters
+                        Log.d("CurfewService", "Distance to home: %.2f meters. At home: $isUserAtHome".format(distance))
+                        serviceScope.launch {
+                            applicationContext.dataStore.edit { prefs ->
+                                prefs[IS_AT_HOME_KEY] = isUserAtHome
+                            }
+                        }
+                    } else {
+                        Log.w("CurfewService", "Home location not set, cannot calculate distance.")
+                        serviceScope.launch {
+                            applicationContext.dataStore.edit { prefs ->
+                                // ИСПРАВЛЕНИЕ: Используем remove() для "сброса" nullable Boolean
+                                prefs.remove(IS_AT_HOME_KEY)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        fusedLocationClient.requestLocationUpdates(locationRequest, locationCallback!!, mainLooper)
+        Log.d("CurfewService", "Запрошены обновления местоположения.")
+    }
+
+
     private fun calculateDistance(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
-        val R = 6371e3 // Радиус Земли в метрах
+        val R = 6371e3
         val phi1 = Math.toRadians(lat1)
         val phi2 = Math.toRadians(lat2)
         val deltaPhi = Math.toRadians(lat2 - lat1)

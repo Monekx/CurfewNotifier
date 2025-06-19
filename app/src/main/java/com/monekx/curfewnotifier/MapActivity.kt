@@ -25,6 +25,9 @@ import org.osmdroid.views.overlay.mylocation.GpsMyLocationProvider
 import org.osmdroid.views.overlay.mylocation.MyLocationNewOverlay
 import com.monekx.curfewnotifier.databinding.ActivityMapOsmdroidBinding
 
+// Импортируем ключ для радиуса
+import com.monekx.curfewnotifier.HOME_RADIUS_METERS_KEY
+
 class MapActivity : AppCompatActivity() {
 
     private lateinit var mapView: MapView
@@ -33,6 +36,8 @@ class MapActivity : AppCompatActivity() {
     private var homeMarker: Marker? = null
     private var homeCircle: Polygon? = null
     private lateinit var myLocationOverlay: MyLocationNewOverlay
+
+    private var currentHomeRadius: Int = 50 // Переменная для хранения радиуса
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -93,7 +98,7 @@ class MapActivity : AppCompatActivity() {
         mapView.controller.setCenter(ukraineCenter)
 
 
-        // Загружаем сохраненную точку дома при старте активности
+        // Загружаем сохраненную точку дома и радиус при старте активности
         runBlocking {
             val latKey = intPreferencesKey("home_lat_int")
             val lonKey = intPreferencesKey("home_lon_int")
@@ -101,12 +106,13 @@ class MapActivity : AppCompatActivity() {
 
             val storedLatInt = preferences[latKey]
             val storedLonInt = preferences[lonKey]
+            currentHomeRadius = preferences[HOME_RADIUS_METERS_KEY] ?: 50 // Загружаем радиус, дефолт 50
 
             if (storedLatInt != null && storedLonInt != null) {
                 val storedLat = storedLatInt / 1_000_000.0
                 val storedLon = storedLonInt / 1_000_000.0
                 selectedLocation = GeoPoint(storedLat, storedLon)
-                updateHomeMarkerAndCircle(selectedLocation!!)
+                updateHomeMarkerAndCircle(selectedLocation!!) // Обновляем с загруженным радиусом
                 // Если есть сохраненная точка дома, центрируем на ней,
                 // только если местоположение пользователя не активно или еще не получено.
                 if (!myLocationOverlay.isMyLocationEnabled || myLocationOverlay.myLocation == null) {
@@ -122,7 +128,7 @@ class MapActivity : AppCompatActivity() {
                 if (mapView != null && e != null) {
                     val geoPoint = mapView.projection.fromPixels(e.x.toInt(), e.y.toInt()) as GeoPoint
                     selectedLocation = geoPoint
-                    updateHomeMarkerAndCircle(geoPoint)
+                    updateHomeMarkerAndCircle(geoPoint) // Используем текущий радиус
                     return true
                 }
                 return false
@@ -162,9 +168,9 @@ class MapActivity : AppCompatActivity() {
         }
         mapView.overlays.add(homeMarker)
 
-        // Создаем и добавляем круг радиусом 50 метров
+        // Создаем и добавляем круг с РЕАЛЬНЫМ радиусом, загруженным из DataStore
         homeCircle = Polygon().apply {
-            points = Polygon.pointsAsCircle(geoPoint, 50.0) // 50 метров радиус
+            points = Polygon.pointsAsCircle(geoPoint, currentHomeRadius.toDouble()) // ИСПОЛЬЗУЕМ currentHomeRadius
             fillColor = Color.argb(60, 255, 0, 0) // Прозрачный красный цвет для заполнения
             strokeColor = Color.RED // Красный цвет для границы
             strokeWidth = 2.0f // Ширина границы

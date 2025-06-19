@@ -37,6 +37,12 @@ import com.monekx.curfewnotifier.service.CurfewForegroundService
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
+// Импортируем новые ключи
+import com.monekx.curfewnotifier.CURFEW_START_HOUR_KEY
+import com.monekx.curfewnotifier.CURFEW_START_MINUTE_KEY
+import com.monekx.curfewnotifier.CURFEW_END_HOUR_KEY
+import com.monekx.curfewnotifier.CURFEW_END_MINUTE_KEY
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun NotificationSettingsScreen(context: Context) {
@@ -54,6 +60,15 @@ fun NotificationSettingsScreen(context: Context) {
     var editInputMessage by remember { mutableStateOf("") }
     var editInputError by remember { mutableStateOf(false) }
 
+    // Состояния для времени комендантского часа
+    var curfewStartHour by remember { mutableStateOf("23") }
+    var curfewStartMinute by remember { mutableStateOf("00") }
+    var curfewEndHour by remember { mutableStateOf("05") }
+    var curfewEndMinute by remember { mutableStateOf("00") }
+
+    var curfewTimeInputError by remember { mutableStateOf(false) }
+
+
     val saveNotificationConfigs = {
         scope.launch {
             context.dataStore.edit { prefs ->
@@ -63,11 +78,47 @@ fun NotificationSettingsScreen(context: Context) {
         }
     }
 
+    val saveCurfewTimes = {
+        scope.launch {
+            context.dataStore.edit { prefs ->
+                val startHour = curfewStartHour.toIntOrNull()
+                val startMinute = curfewStartMinute.toIntOrNull()
+                val endHour = curfewEndHour.toIntOrNull()
+                val endMinute = curfewEndMinute.toIntOrNull()
+
+                if (startHour != null && startHour in 0..23 &&
+                    startMinute != null && startMinute in 0..59 &&
+                    endHour != null && endHour in 0..23 &&
+                    endMinute != null && endMinute in 0..59
+                ) {
+                    prefs[CURFEW_START_HOUR_KEY] = startHour
+                    prefs[CURFEW_START_MINUTE_KEY] = startMinute
+                    prefs[CURFEW_END_HOUR_KEY] = endHour
+                    prefs[CURFEW_END_MINUTE_KEY] = endMinute
+                    curfewTimeInputError = false
+                    Toast.makeText(context, "Время комендантского часа сохранено", Toast.LENGTH_SHORT).show()
+                } else {
+                    curfewTimeInputError = true
+                    Toast.makeText(context, "Некорректное время комендантского часа", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
+
+
     LaunchedEffect(Unit) {
         context.dataStore.data.first()[NOTIFICATION_CONFIGS_KEY]?.let { savedJson ->
             val type = object : TypeToken<List<NotificationConfig>>() {}.type
             val loadedConfigs: List<NotificationConfig> = Gson().fromJson(savedJson, type)
             notificationConfigs.addAll(loadedConfigs)
+        }
+
+        // Загрузка времени комендантского часа
+        context.dataStore.data.first().let { prefs ->
+            curfewStartHour = (prefs[CURFEW_START_HOUR_KEY] ?: 23).toString().padStart(2, '0')
+            curfewStartMinute = (prefs[CURFEW_START_MINUTE_KEY] ?: 0).toString().padStart(2, '0')
+            curfewEndHour = (prefs[CURFEW_END_HOUR_KEY] ?: 5).toString().padStart(2, '0')
+            curfewEndMinute = (prefs[CURFEW_END_MINUTE_KEY] ?: 0).toString().padStart(2, '0')
         }
     }
 
@@ -134,6 +185,109 @@ fun NotificationSettingsScreen(context: Context) {
                         Spacer(Modifier.width(4.dp))
                         Text("Добавить")
                     }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp)) // Отступ между карточками
+
+        // НОВАЯ КАРТОЧКА: Настройка времени комендантского часа
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+            shape = MaterialTheme.shapes.medium,
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text(
+                    text = "Время комендантского часа",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceAround,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Начало:", style = MaterialTheme.typography.bodyLarge)
+                    OutlinedTextField(
+                        value = curfewStartHour,
+                        onValueChange = { newValue ->
+                            if (newValue.length <= 2 && newValue.all { it.isDigit() }) {
+                                curfewStartHour = newValue
+                                curfewTimeInputError = false
+                            }
+                        },
+                        label = { Text("Час") },
+                        modifier = Modifier.width(70.dp),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        singleLine = true,
+                        isError = curfewTimeInputError
+                    )
+                    Text(":", style = MaterialTheme.typography.bodyLarge)
+                    OutlinedTextField(
+                        value = curfewStartMinute,
+                        onValueChange = { newValue ->
+                            if (newValue.length <= 2 && newValue.all { it.isDigit() }) {
+                                curfewStartMinute = newValue
+                                curfewTimeInputError = false
+                            }
+                        },
+                        label = { Text("Мин") },
+                        modifier = Modifier.width(70.dp),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        singleLine = true,
+                        isError = curfewTimeInputError
+                    )
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceAround,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Конец:", style = MaterialTheme.typography.bodyLarge)
+                    OutlinedTextField(
+                        value = curfewEndHour,
+                        onValueChange = { newValue ->
+                            if (newValue.length <= 2 && newValue.all { it.isDigit() }) {
+                                curfewEndHour = newValue
+                                curfewTimeInputError = false
+                            }
+                        },
+                        label = { Text("Час") },
+                        modifier = Modifier.width(70.dp),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        singleLine = true,
+                        isError = curfewTimeInputError
+                    )
+                    Text(":", style = MaterialTheme.typography.bodyLarge)
+                    OutlinedTextField(
+                        value = curfewEndMinute,
+                        onValueChange = { newValue ->
+                            if (newValue.length <= 2 && newValue.all { it.isDigit() }) {
+                                curfewEndMinute = newValue
+                                curfewTimeInputError = false
+                            }
+                        },
+                        label = { Text("Мин") },
+                        modifier = Modifier.width(70.dp),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        singleLine = true,
+                        isError = curfewTimeInputError
+                    )
+                }
+                if (curfewTimeInputError) {
+                    Text("Введите корректное время (ЧЧ:ММ).", color = MaterialTheme.colorScheme.error, fontSize = 12.sp, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
+                }
+                Spacer(modifier = Modifier.height(16.dp))
+                Button(
+                    onClick = { saveCurfewTimes() },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = MaterialTheme.shapes.small
+                ) {
+                    Text("Сохранить время комендантского часа")
                 }
             }
         }

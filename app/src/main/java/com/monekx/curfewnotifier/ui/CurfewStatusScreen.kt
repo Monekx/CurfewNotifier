@@ -31,30 +31,49 @@ import java.time.LocalDateTime
 import java.time.LocalDate
 import android.util.Log
 
+// Импортируем новые ключи для времени комендантского часа
+import com.monekx.curfewnotifier.CURFEW_START_HOUR_KEY
+import com.monekx.curfewnotifier.CURFEW_START_MINUTE_KEY
+import com.monekx.curfewnotifier.CURFEW_END_HOUR_KEY
+import com.monekx.curfewnotifier.CURFEW_END_MINUTE_KEY
+
 @Composable
 fun CurfewStatusScreen() {
     val context = LocalContext.current
-    val curfewStart = LocalTime.of(23, 0)
-    val curfewEnd = LocalTime.of(5, 0)
 
-    var now by remember { mutableStateOf(LocalTime.now()) } // Это состояние, обновляемое LaunchedEffect
+    // Состояния для настраиваемого времени комендантского часа
+    // Используем remember { mutableStateOf(...) } для LocalTime
+    var curfewStart by remember { mutableStateOf(LocalTime.of(23, 0)) }
+    var curfewEnd by remember { mutableStateOf(LocalTime.of(5, 0)) }
+
+    var now by remember { mutableStateOf(LocalTime.now()) }
     var isAtHome by remember { mutableStateOf<Boolean?>(null) }
     val IS_AT_HOME_KEY = booleanPreferencesKey("is_at_home")
 
     LaunchedEffect(Unit) {
+        // Слушаем изменения в DataStore для времени комендантского часа
+        context.dataStore.data.collect { prefs ->
+            val startHour = prefs[CURFEW_START_HOUR_KEY] ?: 23
+            val startMinute = prefs[CURFEW_START_MINUTE_KEY] ?: 0
+            val endHour = prefs[CURFEW_END_HOUR_KEY] ?: 5
+            val endMinute = prefs[CURFEW_END_MINUTE_KEY] ?: 0
+
+            curfewStart = LocalTime.of(startHour, startMinute)
+            curfewEnd = LocalTime.of(endHour, endMinute)
+            isAtHome = prefs[IS_AT_HOME_KEY]
+            Log.d("CurfewStatusScreen", "Loaded curfew times from DataStore: ${curfewStart.format(DateTimeFormatter.ofPattern("HH:mm"))} - ${curfewEnd.format(DateTimeFormatter.ofPattern("HH:mm"))}")
+        }
+    }
+
+    // Отдельный LaunchedEffect для обновления текущего времени
+    LaunchedEffect(Unit) {
         while (true) {
-            now = LocalTime.now() // Обновляем состояние каждую секунду
-            Log.d("CurfewStatusScreen", "Time updated by LaunchedEffect: ${now.format(DateTimeFormatter.ofPattern("HH:mm:ss"))}")
-            val preferences = context.dataStore.data.first()
-            isAtHome = preferences[IS_AT_HOME_KEY]
+            now = LocalTime.now()
             delay(1000)
         }
     }
 
-    // --- ИСПРАВЛЕНИЕ ЗДЕСЬ: Используем 'now' state для всех расчетов ---
-    // Конвертируем 'now' (LocalTime) в LocalDateTime для расчетов с датой.
-    // При каждой рекомпозиции из-за изменения 'now', эти переменные будут пересчитываться.
-    val currentDateTimeForCalculation = LocalDate.now().atTime(now) // <-- КЛЮЧЕВОЕ ИЗМЕНЕНИЕ
+    val currentDateTimeForCalculation = LocalDate.now().atTime(now)
     val curfewStartToday = LocalDate.now().atTime(curfewStart)
     val curfewEndToday = LocalDate.now().atTime(curfewEnd)
     val curfewStartTomorrow = LocalDate.now().plusDays(1).atTime(curfewStart)
@@ -64,23 +83,17 @@ fun CurfewStatusScreen() {
     val targetDateTime: LocalDateTime
 
     if (currentDateTimeForCalculation.isAfter(curfewStartToday) || currentDateTimeForCalculation.isBefore(curfewEndToday)) {
-        // Если сейчас между 23:00 текущего дня и 05:00 следующего дня, значит, мы в комендантском часе.
-        // Цель - конец комендантского часа сегодня (т.е. завтра утром)
         inCurfew = true
         targetDateTime = if (currentDateTimeForCalculation.isBefore(curfewEndToday)) curfewEndToday else curfewEndTomorrow
     } else {
-        // Если сейчас между 05:00 и 23:00, мы не в комендантском часе.
-        // Цель - начало комендантского часа сегодня (если оно еще не прошло) или завтра.
         inCurfew = false
         targetDateTime = if (currentDateTimeForCalculation.isBefore(curfewStartToday)) curfewStartToday else curfewStartTomorrow
     }
 
-    val remainingDuration = Duration.between(currentDateTimeForCalculation, targetDateTime) // Используем currentDateTimeForCalculation
+    val remainingDuration = Duration.between(currentDateTimeForCalculation, targetDateTime)
     val hours = remainingDuration.toHours()
     val minutes = remainingDuration.toMinutes() % 60
     val seconds = remainingDuration.seconds % 60
-
-    // ... (остальной код UI, использующий hours, minutes, seconds и now для отображения текущего времени) ...
 
     val statusColor = when {
         inCurfew -> MaterialTheme.colorScheme.error
@@ -140,14 +153,14 @@ fun CurfewStatusScreen() {
                 )
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    text = "%02d:%02d:%02d".format(hours, minutes, seconds), // Использует часы/минуты/секунды, рассчитанные на основе 'now' state
+                    text = "%02d:%02d:%02d".format(hours, minutes, seconds),
                     fontSize = 52.sp,
                     fontWeight = FontWeight.ExtraBold,
                     color = statusColor
                 )
                 Spacer(modifier = Modifier.height(16.dp))
                 Text(
-                    text = "Текущее время: ${now.format(DateTimeFormatter.ofPattern("HH:mm:ss"))}", // Использует 'now' state для отображения текущего времени
+                    text = "Текущее время: ${now.format(DateTimeFormatter.ofPattern("HH:mm:ss"))}",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                 )

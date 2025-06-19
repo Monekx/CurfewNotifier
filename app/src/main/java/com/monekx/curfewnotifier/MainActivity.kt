@@ -61,6 +61,19 @@ val Context.dataStore by preferencesDataStore(name = "settings")
 // Ключ для хранения набора конфигураций уведомлений
 val NOTIFICATION_CONFIGS_KEY = stringPreferencesKey("notification_configs")
 
+// КЛЮЧИ ДЛЯ ВРЕМЕНИ КОМЕНДАНТСКОГО ЧАСА
+val CURFEW_START_HOUR_KEY = intPreferencesKey("curfew_start_hour")
+val CURFEW_START_MINUTE_KEY = intPreferencesKey("curfew_start_minute")
+val CURFEW_END_HOUR_KEY = intPreferencesKey("curfew_end_hour")
+val CURFEW_END_MINUTE_KEY = intPreferencesKey("curfew_end_minute")
+
+// КЛЮЧ ДЛЯ РАДИУСА ДОМАШНЕЙ ЗОНЫ
+val HOME_RADIUS_METERS_KEY = intPreferencesKey("home_radius_meters")
+
+// НОВЫЙ КЛЮЧ: для хранения списка ID отправленных уведомлений (для предотвращения спама)
+val SENT_NOTIFICATIONS_KEY = stringPreferencesKey("sent_notifications_key")
+
+
 // Инициализируем Gson
 val gson = Gson()
 
@@ -69,7 +82,7 @@ sealed class Screen(val route: String, val title: String, val icon: ImageVector)
     object CurfewStatus : Screen("curfew_status", "Комендант", Icons.Default.Info)
     object Notifications : Screen("notifications", "Уведомления", Icons.Default.Notifications)
     object HomeLocation : Screen("home_location", "Дом", Icons.Default.Place)
-    object News : Screen("news", "Новости", Icons.Default.Home) // Изменен значок на "Дом" для примера
+    object News : Screen("news", "Новости", Icons.Default.Home)
 }
 
 
@@ -207,7 +220,7 @@ fun MainAppScreen(mapLauncher: ActivityResultLauncher<Intent>) {
 
     Scaffold(
         bottomBar = {
-            NavigationBar(modifier = Modifier.height(64.dp)) { // Увеличиваем высоту для лучшего вида
+            NavigationBar(modifier = Modifier.height(64.dp)) {
                 val navBackStackEntry by navController.currentBackStackEntryAsState()
                 val currentRoute = navBackStackEntry?.destination?.route
 
@@ -218,13 +231,10 @@ fun MainAppScreen(mapLauncher: ActivityResultLauncher<Intent>) {
                         selected = currentRoute == screen.route,
                         onClick = {
                             navController.navigate(screen.route) {
-                                // Избегаем создания нескольких копий одного и того же элемента
                                 popUpTo(navController.graph.startDestinationId) {
                                     saveState = true
                                 }
-                                // Избегаем нескольких копий одного и того же элемента в стеке
                                 launchSingleTop = true
-                                // Восстанавливаем состояние при повторном выборе элемента
                                 restoreState = true
                             }
                         }
